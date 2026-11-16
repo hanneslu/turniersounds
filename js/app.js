@@ -9,7 +9,7 @@ import { openPadEditor } from './editor.js';
 const S = model.state;
 const root = document.getElementById('app');
 const FADE_BUTTON_SECONDS = 2.5;
-const APP_VERSION = '1.2';
+const APP_VERSION = '1.3';
 const ACCEPT = '.zip,.json,.mp3,.m4a,.mp4,.aac,.wav,.aif,.aiff,.caf,.flac,.ogg,.opus,audio/*,application/json,application/zip';
 
 let editMode = false;
@@ -356,7 +356,7 @@ function openSettings() {
     applyTheme(st);
     model.saveSettings();
   }
-  const diag = h('p', { class: 'hint' }, `Version ${APP_VERSION} · ${audio.status()}`);
+  const diag = h('p', { class: 'hint' }, `Version ${APP_VERSION} · ${audio.status()} · ${wakeStatus()}`);
   const data = h('div', {});
   function drawData() {
     const missing = model.missingFiles(), unused = model.unusedFiles();
@@ -398,7 +398,7 @@ function openSettings() {
           h('div', { class: 'row wrap' },
             h('a', { class: 'btn', href: 'ANLEITUNG.html', target: '_blank', rel: 'noopener' }, 'Kurzanleitung öffnen'),
             h('button', { class: 'btn', onclick: () => {
-              audio.beep().catch(() => {}).then(() => setTimeout(() => { diag.textContent = `Version ${APP_VERSION} · ${audio.status()}`; }, 300));
+              audio.beep().catch(() => {}).then(() => setTimeout(() => { diag.textContent = `Version ${APP_VERSION} · ${audio.status()} · ${wakeStatus()}`; }, 300));
             } }, '🔊 Testton')),
           diag),
         h('section', {},
@@ -418,9 +418,20 @@ function openSettings() {
 
 // ---------- Start ----------
 
+// Bildschirm anlassen, solange die App sichtbar ist. iOS gibt die Sperre beim App-Wechsel
+// oder ohne ersichtlichen Grund frei; sie wird deshalb bei jeder Berührung erneut angefordert.
+let wakeLock = null, wakePending = false;
 async function keepAwake() {
-  try { if (navigator.wakeLock && document.visibilityState === 'visible') await navigator.wakeLock.request('screen'); } catch { /* egal */ }
+  if (wakeLock || wakePending || !('wakeLock' in navigator) || document.visibilityState !== 'visible') return;
+  wakePending = true;
+  try {
+    wakeLock = await navigator.wakeLock.request('screen');
+    wakeLock.addEventListener('release', () => { wakeLock = null; });
+  } catch { wakeLock = null; }
+  wakePending = false;
 }
+const wakeStatus = () => (!('wakeLock' in navigator) ? 'Bildschirm anlassen: vom Gerät nicht unterstützt'
+  : wakeLock ? 'Bildschirm bleibt an' : 'Bildschirm anlassen: nicht aktiv');
 
 async function start() {
   try {
@@ -435,6 +446,7 @@ async function start() {
   requestAnimationFrame(frame);
   keepAwake();
   document.addEventListener('visibilitychange', keepAwake);
+  document.addEventListener('pointerdown', keepAwake, true);
   window.addEventListener('dragover', e => e.preventDefault());
   window.addEventListener('drop', e => {
     e.preventDefault();

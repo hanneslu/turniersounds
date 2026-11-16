@@ -9,7 +9,7 @@ import { openPadEditor } from './editor.js';
 const S = model.state;
 const root = document.getElementById('app');
 const FADE_BUTTON_SECONDS = 2.5;
-const APP_VERSION = '1.1';
+const APP_VERSION = '1.2';
 const ACCEPT = '.zip,.json,.mp3,.m4a,.mp4,.aac,.wav,.aif,.aiff,.caf,.flac,.ogg,.opus,audio/*,application/json,application/zip';
 
 let editMode = false;

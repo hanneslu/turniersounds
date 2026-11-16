@@ -10,6 +10,7 @@
 let ctx = null;         // Wiedergabe (entsteht bei der ersten Berührung)
 let decodeCtx = null;   // nur zum Dekodieren
 let silentEl = null;
+let needsFresh = false; // Tonausgabe bei der nächsten Berührung neu anlegen
 
 const IS_IOS = /iP(hone|ad|od)/.test(navigator.userAgent)
   || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -26,6 +27,19 @@ function silentWavUrl() {
 
 // Muss innerhalb einer Nutzer-Berührung aufgerufen werden.
 export function ensureCtx() {
+  // Nach App-Wechsel, Sperrbildschirm oder Anruf liefert iOS oft eine "tote" Tonausgabe,
+  // die sich nicht wieder aufwecken lässt. Dann wird sie verworfen und neu angelegt.
+  // Die vorbereiteten Jingles bleiben erhalten, weil sie nicht an der Tonausgabe hängen.
+  if (ctx && (needsFresh || ctx.state === 'interrupted' || ctx.state === 'closed')) {
+    const old = ctx, v = current;
+    ctx = null;
+    current = null;
+    old.onstatechange = null;
+    try { old.close().catch(() => {}); } catch { /* egal */ }
+    if (v && v.onEnd) v.onEnd();
+  }
+  needsFresh = false;
+  if (silentEl && silentEl.paused) silentEl.play().catch(() => {});
   if (!ctx) {
     // iOS: als Medienwiedergabe anmelden, damit der Stummschalter den Ton nicht unterdrückt.
     try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch { /* egal */ }
@@ -64,11 +78,12 @@ export function ensureCtx() {
 
 // Jede Berührung versucht, eine unterbrochene Tonausgabe wieder aufzunehmen.
 for (const ev of ['touchend', 'click', 'keydown']) {
-  document.addEventListener(ev, () => { if (!ctx || ctx.state !== 'running') ensureCtx(); }, true);
+  document.addEventListener(ev, () => { if (!ctx || needsFresh || ctx.state !== 'running') ensureCtx(); }, true);
 }
-document.addEventListener('visibilitychange', () => {
-  if (ctx && document.visibilityState === 'visible' && ctx.state !== 'running') ctx.resume().catch(() => {});
-});
+// War die App im Hintergrund, wird die Tonausgabe auf iOS bei der nächsten Berührung erneuert.
+const wentAway = () => { if (IS_IOS && ctx) needsFresh = true; };
+document.addEventListener('visibilitychange', () => { if (document.visibilityState !== 'visible') wentAway(); });
+window.addEventListener('pagehide', wentAway);
 
 function getDecodeCtx() {
   if (!decodeCtx) {
@@ -85,6 +100,9 @@ export function decodeBlob(blob) {
     if (p && p.catch) p.catch(rej);
   }));
 }
+
+// Erzwingt bei der nächsten Berührung eine neue Tonausgabe.
+export function refresh() { if (ctx) needsFresh = true; }
 
 // Für die Fehlersuche (Einstellungen → Hilfe).
 export function status() {
@@ -108,7 +126,8 @@ export function beep() {
     o.start(t); o.stop(t + 0.55);
   };
   if (c.state === 'running') { start(); return Promise.resolve(); }
-  return c.resume().then(start);
+  return Promise.race([c.resume(), new Promise((_, rej) => setTimeout(rej, 1500))])
+    .then(start, () => { needsFresh = true; });
 }
 
 // ---------- Ausschnitt-Cache ----------
@@ -229,7 +248,7 @@ export async function playBuffer(buffer, o) {
     // Tonausgabe ist noch gesperrt oder unterbrochen: kurz auf die Freigabe warten.
     await Promise.race([c.resume().catch(() => {}), new Promise(r => setTimeout(r, 1500))]);
     if (seq !== playSeq) return;
-    if (c.state !== 'running') throw new Error('Tonausgabe gesperrt');
+    if (c.state !== 'running') { needsFresh = true; throw new Error('Tonausgabe gesperrt'); }
   }
   const offset = Math.max(0, o.offset || 0);
   const duration = Math.max(0.05, Math.min(o.duration || buffer.duration, buffer.duration - offset));

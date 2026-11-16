@@ -2,25 +2,113 @@
 // Pro Jingle wird nur der zugeschnittene Ausschnitt dekodiert im Speicher gehalten,
 // damit er beim Antippen ohne Verzögerung startet.
 
-let ctx = null;
+//
+// Wichtig für iPhone/iPad: Der Wiedergabe-Kontext darf erst bei einer Berührung des Nutzers
+// entstehen und muss in derselben Berührung "entsperrt" werden, sonst bleibt er stumm.
+// Dekodiert wird deshalb über einen getrennten Offline-Kontext, der keine Berührung braucht.
 
+let ctx = null;         // Wiedergabe (entsteht bei der ersten Berührung)
+let decodeCtx = null;   // nur zum Dekodieren
+let silentEl = null;
+
+const IS_IOS = /iP(hone|ad|od)/.test(navigator.userAgent)
+  || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+function silentWavUrl() {
+  const n = 4000, b = new ArrayBuffer(44 + n), v = new DataView(b);
+  const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  w(0, 'RIFF'); v.setUint32(4, 36 + n, true); w(8, 'WAVEfmt '); v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, 8000, true); v.setUint32(28, 8000, true);
+  v.setUint16(32, 1, true); v.setUint16(34, 8, true); w(36, 'data'); v.setUint32(40, n, true);
+  new Uint8Array(b, 44).fill(128);
+  return URL.createObjectURL(new Blob([b], { type: 'audio/wav' }));
+}
+
+// Muss innerhalb einer Nutzer-Berührung aufgerufen werden.
 export function ensureCtx() {
   if (!ctx) {
-    const AC = window.AudioContext || window.webkitAudioContext;
-    ctx = new AC({ latencyHint: 'interactive' });
-    // iOS: auch bei aktiviertem Stummschalter abspielen.
+    // iOS: als Medienwiedergabe anmelden, damit der Stummschalter den Ton nicht unterdrückt.
     try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch { /* egal */ }
+    const AC = window.AudioContext || window.webkitAudioContext;
+    ctx = new AC();
+    ctx.onstatechange = () => {
+      // Wird die Wiedergabe vom System unterbrochen (Anruf, App-Wechsel), Anzeige zurücksetzen.
+      if (ctx.state !== 'running' && current) {
+        const v = current;
+        current = null;
+        try { v.src.stop(); } catch { /* egal */ }
+        if (v.onEnd) v.onEnd();
+      }
+    };
   }
-  if (ctx.state !== 'running') ctx.resume().catch(() => {});
+  if (ctx.state !== 'running') {
+    ctx.resume().catch(() => {});
+    // Stiller Klang innerhalb der Berührung: entsperrt die Tonausgabe auf iOS zuverlässig.
+    try {
+      const s = ctx.createBufferSource();
+      s.buffer = ctx.createBuffer(1, 1, 22050);
+      s.connect(ctx.destination);
+      s.start(0);
+    } catch { /* egal */ }
+  }
+  // Ältere iOS-Versionen ohne audioSession: stilles Audio-Element erzwingt die Medienwiedergabe.
+  if (IS_IOS && !navigator.audioSession && !silentEl) {
+    try {
+      silentEl = new Audio(silentWavUrl());
+      silentEl.loop = true;
+      silentEl.play().catch(() => {});
+    } catch { /* egal */ }
+  }
   return ctx;
 }
 
+// Jede Berührung versucht, eine unterbrochene Tonausgabe wieder aufzunehmen.
+for (const ev of ['touchend', 'click', 'keydown']) {
+  document.addEventListener(ev, () => { if (!ctx || ctx.state !== 'running') ensureCtx(); }, true);
+}
+document.addEventListener('visibilitychange', () => {
+  if (ctx && document.visibilityState === 'visible' && ctx.state !== 'running') ctx.resume().catch(() => {});
+});
+
+function getDecodeCtx() {
+  if (!decodeCtx) {
+    const OC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    decodeCtx = new OC(2, 44100, 44100);
+  }
+  return decodeCtx;
+}
+
 export function decodeBlob(blob) {
-  const c = ensureCtx();
+  const c = getDecodeCtx();
   return blob.arrayBuffer().then(ab => new Promise((res, rej) => {
     const p = c.decodeAudioData(ab, res, rej);
     if (p && p.catch) p.catch(rej);
   }));
+}
+
+// Für die Fehlersuche (Einstellungen → Hilfe).
+export function status() {
+  const session = navigator.audioSession ? navigator.audioSession.type : 'nicht vorhanden';
+  return ctx
+    ? `Tonausgabe: ${ctx.state}, ${ctx.sampleRate} Hz · Audio-Session: ${session}`
+    : `Tonausgabe: noch nicht gestartet · Audio-Session: ${session}`;
+}
+
+// Kurzer Testton, unabhängig von importierten Songs.
+export function beep() {
+  const c = ensureCtx();
+  const start = () => {
+    const o = c.createOscillator(), g = c.createGain();
+    o.frequency.value = 880;
+    o.connect(g); g.connect(c.destination);
+    const t = c.currentTime + 0.02;
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.3, t + 0.02);
+    g.gain.linearRampToValueAtTime(0, t + 0.5);
+    o.start(t); o.stop(t + 0.55);
+  };
+  if (c.state === 'running') { start(); return Promise.resolve(); }
+  return c.resume().then(start);
 }
 
 // ---------- Ausschnitt-Cache ----------
@@ -61,7 +149,7 @@ function slice(full, from, to) {
   const s = Math.min(full.length - 1, Math.max(0, Math.floor((from || 0) * sr)));
   let e = Math.min(full.length, Math.ceil((to || 0) * sr));
   if (e <= s) e = full.length;
-  const buf = ctx.createBuffer(full.numberOfChannels, e - s, sr);
+  const buf = getDecodeCtx().createBuffer(full.numberOfChannels, e - s, sr);
   for (let ch = 0; ch < full.numberOfChannels; ch++) {
     buf.copyToChannel(full.getChannelData(ch).subarray(s, e), ch);
   }
@@ -131,10 +219,18 @@ export function clearCache() {
 // ---------- Wiedergabe (immer nur ein Klang gleichzeitig) ----------
 
 let current = null;
+let playSeq = 0;
 
-export function playBuffer(buffer, o) {
+export async function playBuffer(buffer, o) {
   const c = ensureCtx();
   stop(0.1);
+  const seq = ++playSeq;
+  if (c.state !== 'running') {
+    // Tonausgabe ist noch gesperrt oder unterbrochen: kurz auf die Freigabe warten.
+    await Promise.race([c.resume().catch(() => {}), new Promise(r => setTimeout(r, 1500))]);
+    if (seq !== playSeq) return;
+    if (c.state !== 'running') throw new Error('Tonausgabe gesperrt');
+  }
   const offset = Math.max(0, o.offset || 0);
   const duration = Math.max(0.05, Math.min(o.duration || buffer.duration, buffer.duration - offset));
   const vol = o.volume == null ? 1 : o.volume;
@@ -162,6 +258,7 @@ export function playBuffer(buffer, o) {
 }
 
 export function stop(fade) {
+  playSeq++;
   const v = current;
   if (!v) return;
   current = null;

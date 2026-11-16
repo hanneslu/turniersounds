@@ -1,6 +1,6 @@
 // Service Worker: macht die App offline nutzbar.
 // Bei Änderungen an der App die Versionsnummer erhöhen, damit Geräte die neue Fassung laden.
-const VERSION = 'turniersounds-v1';
+const VERSION = 'turniersounds-v2';
 const FILES = [
   './', 'index.html', 'styles.css', 'manifest.webmanifest', 'ANLEITUNG.html',
   'js/app.js', 'js/audio.js', 'js/editor.js', 'js/model.js', 'js/store.js', 'js/theme.js', 'js/util.js', 'js/zip.js',

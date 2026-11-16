@@ -9,6 +9,7 @@ import { openPadEditor } from './editor.js';
 const S = model.state;
 const root = document.getElementById('app');
 const FADE_BUTTON_SECONDS = 2.5;
+const APP_VERSION = '1.1';
 const ACCEPT = '.zip,.json,.mp3,.m4a,.mp4,.aac,.wav,.aif,.aiff,.caf,.flac,.ogg,.opus,audio/*,application/json,application/zip';
 
 let editMode = false;
@@ -136,20 +137,27 @@ async function tapPad(t) {
   audio.stop(0.12);
   loadingId = t.id;
   updatePads();
+  let buf;
   try {
-    const buf = await audio.getClip(t, model.getBlob, true);
-    if (loadingId !== t.id) return;
-    loadingId = null;
-    audio.playBuffer(buf, {
+    buf = await audio.getClip(t, model.getBlob, true);
+  } catch (e) {
+    if (loadingId === t.id) loadingId = null;
+    toast(`„${t.title}“ konnte nicht gelesen werden.`);
+    updatePads();
+    return;
+  }
+  if (loadingId !== t.id) return;
+  try {
+    await audio.playBuffer(buf, {
       id: t.id, volume: t.volume == null ? 1 : t.volume,
       fadeIn: t.fadesIn ? t.fadesInDuration || 0 : 0,
       fadeOut: t.fadesOut ? t.fadesOutDuration || 0 : 0,
       onEnd: updatePads,
     });
   } catch (e) {
-    if (loadingId === t.id) loadingId = null;
-    toast(`„${t.title}“ konnte nicht abgespielt werden.`);
+    toast('Die Tonausgabe ist noch gesperrt. Bitte den Jingle noch einmal antippen.');
   }
+  if (loadingId === t.id) loadingId = null;
   updatePads();
 }
 
@@ -348,6 +356,7 @@ function openSettings() {
     applyTheme(st);
     model.saveSettings();
   }
+  const diag = h('p', { class: 'hint' }, `Version ${APP_VERSION} · ${audio.status()}`);
   const data = h('div', {});
   function drawData() {
     const missing = model.missingFiles(), unused = model.unusedFiles();
@@ -386,7 +395,12 @@ function openSettings() {
           h('p', { class: 'hint' }, 'Importieren: Paket (.zip), soundboard.json oder einzelne Songs (MP3, M4A, WAV – ohne Kopierschutz). Exportieren: erzeugt ein Paket mit allen Boards, Ausschnitten und Songs – als Sicherung oder zur Weitergabe an andere.')),
         h('section', {}, h('h3', {}, 'Hilfe'),
           h('p', { class: 'hint' }, 'Antippen startet einen Jingle, erneutes Antippen stoppt ihn. Es läuft immer nur ein Jingle. „Bearbeiten“ oben rechts öffnet den Modus zum Ändern von Ausschnitt, Beschriftung, Farbe und Reihenfolge.'),
-          h('a', { class: 'btn', href: 'ANLEITUNG.html', target: '_blank', rel: 'noopener' }, 'Kurzanleitung öffnen')),
+          h('div', { class: 'row wrap' },
+            h('a', { class: 'btn', href: 'ANLEITUNG.html', target: '_blank', rel: 'noopener' }, 'Kurzanleitung öffnen'),
+            h('button', { class: 'btn', onclick: () => {
+              audio.beep().catch(() => {}).then(() => setTimeout(() => { diag.textContent = `Version ${APP_VERSION} · ${audio.status()}`; }, 300));
+            } }, '🔊 Testton')),
+          diag),
         h('section', {},
           h('button', { class: 'btn danger', onclick: async () => {
             if (await confirmDelete('Wirklich alles löschen?', 'Alle Boards, Jingles, Songs und Einstellungen werden von diesem Gerät entfernt. Das lässt sich nicht rückgängig machen – exportieren Sie vorher ein Paket, wenn Sie die Sammlung behalten möchten.')) {

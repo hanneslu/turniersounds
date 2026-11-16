@@ -138,8 +138,7 @@ export function openPadEditor(track, { onSave, onDelete }) {
       fadeIn: !fromEnd && d.fadesIn ? d.fadesInDuration : 0,
       fadeOut: d.fadesOut ? d.fadesOutDuration : 0,
       onEnd: draw,
-    });
-    if (!raf) raf = requestAnimationFrame(loop);
+    }).then(() => { if (!raf) raf = requestAnimationFrame(loop); }).catch(() => {});
   }
 
   const stepper = which => h('div', { class: 'stepper' },

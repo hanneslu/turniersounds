@@ -9,14 +9,26 @@ import { openPadEditor } from './editor.js';
 const S = model.state;
 const root = document.getElementById('app');
 const FADE_BUTTON_SECONDS = 2.5;
-const APP_VERSION = '1.3';
+const APP_VERSION = '1.4';
 const ACCEPT = '.zip,.json,.mp3,.m4a,.mp4,.aac,.wav,.aif,.aiff,.caf,.flac,.ogg,.opus,audio/*,application/json,application/zip';
 
 let editMode = false;
 let loadingId = null;
 let importBoard = null;
 const padEls = new Map();
-let nowTitle = null, nowTime = null;
+let nowTitle = null, nowTime = null, nowBar = null;
+
+const ICONS = {
+  gear: '<svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
+  stop: '<svg class="ico" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none"/></svg>',
+  fade: '<svg class="ico" viewBox="0 0 24 24"><path d="M3 7h3c4 0 7 10 12 10h3"/><path d="M3 17h18" opacity=".35"/></svg>',
+  edit: '<svg class="ico" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
+};
+function icon(name) {
+  const t = document.createElement('template');
+  t.innerHTML = ICONS[name];
+  return t.content.firstChild;
+}
 
 const fileInput = h('input', { type: 'file', multiple: true, accept: ACCEPT, class: 'visually-hidden', tabIndex: -1,
   onchange: async e => { const files = [...e.target.files]; e.target.value = ''; if (files.length) await runImport(files); } });
@@ -161,13 +173,15 @@ async function tapPad(t) {
   updatePads();
 }
 
+const setTimes = (el, text) => el.querySelectorAll('.time').forEach(t => { t.textContent = text; });
+
 function updatePads() {
   const cur = audio.currentId();
   for (const [id, el] of padEls) {
     const on = id === cur;
     if (el.classList.contains('playing') && !on) {
       el.style.removeProperty('--p');
-      el.querySelector('.time').textContent = fmtTime(trackLen(S.tracks[id]));
+      setTimes(el, fmtTime(trackLen(S.tracks[id])));
     }
     el.classList.toggle('playing', on);
     el.classList.toggle('loading', id === loadingId);
@@ -175,20 +189,46 @@ function updatePads() {
   const t = S.tracks[cur];
   if (nowTitle) nowTitle.textContent = t ? t.title : '';
   if (nowTime && !t) nowTime.textContent = '';
+  if (nowBar) {
+    nowBar.style.setProperty('--pc', t ? colorOf(t.colorScheme, accent()) : 'transparent');
+    if (!t) nowBar.style.setProperty('--p', 0);
+  }
 }
 
 function frame() {
   const p = audio.position();
   if (p && S.tracks[p.id]) {
+    const share = (p.elapsed / p.duration).toFixed(4);
     const rest = '−' + fmtTime(p.duration - p.elapsed);
     const el = padEls.get(p.id);
     if (el) {
-      el.style.setProperty('--p', (p.elapsed / p.duration).toFixed(4));
-      el.querySelector('.time').textContent = rest;
+      el.style.setProperty('--p', share);
+      setTimes(el, rest);
     }
     if (nowTime) nowTime.textContent = rest;
+    if (nowBar) nowBar.style.setProperty('--p', share);
   }
   requestAnimationFrame(frame);
+}
+
+// Gleitende Markierung der Board-Reiter: startet an der alten Position und gleitet zur neuen.
+let indPos = null;
+function placeIndicator(animate) {
+  const tb = root.querySelector('.tabs');
+  const ind = tb && tb.querySelector('.tab-ind'), t = tb && tb.querySelector('.tab.on');
+  if (!ind || !t) return;
+  ind.style.transition = 'none';
+  if (animate && indPos) { ind.style.left = indPos[0] + 'px'; ind.style.width = indPos[1] + 'px'; }
+  else { ind.style.left = t.offsetLeft + 'px'; ind.style.width = t.offsetWidth + 'px'; }
+  void ind.offsetWidth;
+  ind.style.transition = '';
+  ind.style.left = t.offsetLeft + 'px';
+  ind.style.width = t.offsetWidth + 'px';
+  indPos = [t.offsetLeft, t.offsetWidth];
+  // Aktiven Reiter sichtbar halten
+  if (t.offsetLeft < tb.scrollLeft || t.offsetLeft + t.offsetWidth > tb.scrollLeft + tb.clientWidth) {
+    tb.scrollTo({ left: Math.max(0, t.offsetLeft - 24), behavior: 'smooth' });
+  }
 }
 
 // ---------- Aufbau der Oberfläche ----------
@@ -205,13 +245,14 @@ function render() {
   const g = root.querySelector('.grid'), tb = root.querySelector('.tabs');
   if (g) g.scrollTop = scroll[0];
   if (tb) tb.scrollLeft = scroll[1];
+  placeIndicator(true);
   updatePads();
   if (S.activeBoard) audio.preload(model.tracksOf(S.activeBoard).filter(model.hasFile), model.getBlob);
 }
 
 function header(hasBoards) {
   return h('header', { class: 'top' },
-    h('button', { class: 'btn icon', 'aria-label': 'Einstellungen', onclick: openSettings }, '⚙'),
+    h('button', { class: 'btn icon', 'aria-label': 'Einstellungen', onclick: openSettings }, icon('gear')),
     h('h1', {}, S.settings.appName),
     hasBoards
       ? h('button', { class: 'btn ' + (editMode ? 'primary' : ''), onclick: () => { editMode = !editMode; audio.stop(); render(); } },
@@ -220,14 +261,14 @@ function header(hasBoards) {
 }
 
 function tabs(boards) {
-  return h('nav', { class: 'tabs' }, boards.map(b => {
+  return h('div', { class: 'tabs-wrap' }, h('nav', { class: 'tabs' }, h('span', { class: 'tab-ind' }), boards.map(b => {
     const c = colorOf(b.colorScheme, accent());
     const on = b.id === S.activeBoard;
     return h('button', {
-      class: 'tab' + (on ? ' on' : ''), style: { '--c': c, '--on-c': contrast(c) },
+      class: 'tab' + (on ? ' on' : ''), style: { '--c': c },
       onclick: () => { if (!on) { model.setActive(b.id); render(); } },
     }, h('i', {}), b.title);
-  }));
+  })));
 }
 
 function toolbar() {
@@ -249,15 +290,22 @@ function grid() {
   tracks.forEach((t, i) => {
     const c = colorOf(t.colorScheme, accent());
     const act = () => (editMode ? editPad(t) : tapPad(t));
+    const timeText = model.hasFile(t) ? fmtTime(trackLen(t)) : 'Datei fehlt';
+    // Zwei gleiche Ebenen: "base" normal, "fill" in Jingle-Farbe, die beim Abspielen von links freigelegt wird.
+    const layer = kind => h('span', { class: 'layer ' + kind, 'aria-hidden': kind === 'fill' ? 'true' : null },
+      h('span', { class: 'row1' },
+        editMode && kind === 'base' ? h('span', { class: 'pencil' }, icon('edit')) : null,
+        h('span', { class: 'time' }, timeText)),
+      h('span', { class: 'title' }, t.title));
     const el = h('div', {
       class: 'pad' + (model.hasFile(t) ? '' : ' missing'), role: 'button', tabIndex: 0,
       style: { '--c': c, '--on-c': contrast(c) },
       onclick: act,
       onkeydown: e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); act(); } },
     },
-    h('span', { class: 'title' }, t.title),
-    h('span', { class: 'time' }, model.hasFile(t) ? fmtTime(trackLen(t)) : 'Datei fehlt'),
-    editMode && h('span', { class: 'pencil' }, '✎'),
+    h('span', { class: 'stripe' }),
+    layer('base'),
+    !editMode && layer('fill'),
     editMode && h('button', { class: 'mv l', disabled: i === 0, 'aria-label': 'Nach vorne',
       onclick: e => { e.stopPropagation(); model.moveTrack(t.id, -1); render(); } }, '◀'),
     editMode && h('button', { class: 'mv r', disabled: i === tracks.length - 1, 'aria-label': 'Nach hinten',
@@ -272,12 +320,16 @@ function transport() {
   nowTitle = h('div', { class: 'now-title' });
   nowTime = h('div', { class: 'now-time' });
   if (editMode) {
+    nowBar = null;
     return h('footer', { class: 'transport note' }, 'Bearbeiten-Modus: Jingle antippen, um ihn zu ändern. Mit ◀ ▶ die Reihenfolge anpassen.');
   }
-  return h('footer', { class: 'transport' },
+  nowBar = h('footer', { class: 'transport' },
     h('div', { class: 'now' }, nowTitle, nowTime),
-    h('button', { class: 'btn big', onclick: () => { loadingId = null; audio.stop(FADE_BUTTON_SECONDS); updatePads(); } }, '◣ Ausblenden'),
-    h('button', { class: 'btn big stop', onclick: () => { loadingId = null; audio.stop(0.05); updatePads(); } }, '■ Stopp'));
+    h('button', { class: 'round', 'aria-label': 'Ausblenden', title: 'Ausblenden',
+      onclick: () => { loadingId = null; audio.stop(FADE_BUTTON_SECONDS); updatePads(); } }, icon('fade')),
+    h('button', { class: 'round stop', 'aria-label': 'Stopp', title: 'Stopp',
+      onclick: () => { loadingId = null; audio.stop(0.05); updatePads(); } }, icon('stop')));
+  return nowBar;
 }
 
 function welcome() {
@@ -447,6 +499,9 @@ async function start() {
   keepAwake();
   document.addEventListener('visibilitychange', keepAwake);
   document.addEventListener('pointerdown', keepAwake, true);
+  // iOS zeigt den Drück-Zustand (:active, federnde Kacheln) nur mit einem touchstart-Listener.
+  document.addEventListener('touchstart', () => {}, { passive: true });
+  window.addEventListener('resize', () => placeIndicator(false));
   window.addEventListener('dragover', e => e.preventDefault());
   window.addEventListener('drop', e => {
     e.preventDefault();

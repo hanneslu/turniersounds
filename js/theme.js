@@ -23,6 +23,11 @@ export function applyTheme(s) {
   set('--surface', mix(bg, text, 0.08));
   set('--surface2', mix(bg, text, 0.16));
   set('--border', mix(bg, text, 0.22));
+  // Kacheln heben sich deutlich vom Hintergrund ab: auf dunklem Grund heller, auf hellem Grund fast weiß.
+  const dark = text === '#ffffff';
+  set('--tile', dark ? mix(bg, '#ffffff', 0.1) : mix(bg, '#ffffff', 0.85));
+  set('--raised', dark ? mix(bg, '#ffffff', 0.22) : '#ffffff');
+  set('--hair', mix(bg, text, dark ? 0.16 : 0.14));
   set('--accent', accent);
   set('--on-accent', contrast(accent));
   document.documentElement.style.colorScheme = text === '#ffffff' ? 'dark' : 'light';
